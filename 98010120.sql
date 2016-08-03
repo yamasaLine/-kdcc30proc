@@ -1,23 +1,3 @@
-/*
-*author:zhangyuchun
-*description:股票审核
-*adddate:2015-06-10
-*editdate:2015-07-10  添加对总的了结笔数和总的成功率的统计
-		  2015-07-13  透支数据根据高手类型统计
-		  2015-07-20  修复不涉及扣除或回补积分的时候对确认消息的判断
-		  2015-07-20  修复回补积分会产生消费积分的bug
-		  2015-07-22  修复账户扣除为负数的bug
-		  2015-07-22  添加审核未通过的逻辑
-		  2015-07-22  修复账户扣除为负数的bug
-		  2015-07-23  修复回补积分未更新totalcash的bug
-		  2015-07-30  修复交易失败后，将交易记录置为驳回
-		  2015-08-19  添加仓位的统计；把自然日的统计过程移入up_mid_98020390 by zhoujia
-		  2015-11-25  历史消息、订阅消息和高手操作表，增加持仓天数和持仓 add by zhoujia
-		  2015-12-17  卖出操作后会更新最高收益率 add by zhoujia
-		  2015-12-28  交易后将消费流水写到新的统一积分流水表 add by zhangyuchun
-		  2015-01-07  只有有消费的时候才记录消费流水 add by zhangyuchun
-		  2016-04-26  修复计算积分的bug add by zhangyuchun
-*/
 ALTER procedure [dbo].[up_mid_98010120]
 @id int, --需要审核的交易id
 @p_gybh int=0, --操作员工编号
@@ -444,7 +424,7 @@ begin
 						select msg.gsid,msg.id,msg.profit,msg.gsname,kh.wxid,kh.khid,msg.stockcode,msg.stockname,
 																msg.stocknumber,msg.stockprice,msg.datatype,msg.ordertype,msg.tradetime,msg.content,getdate(),
 																gskh.subtype,0,0,0,convert(varchar(8),getDate(),112),@r_msgconfirm,@position,@positionDays
-																 from (select * from kdcc30data..t_cl_gs_kh where gsid=@gsid and status=1) gskh
+																from (select * from kdcc30data..t_cl_gs_kh where gsid=@gsid and status=1) gskh
 																inner join kdcc30data..t_cl_kh kh on gskh.khid=kh.khid
 																inner join kdcc30data..t_cl_kh_config c on gskh.khid=c.khid
 																inner join kdcc30data..t_cl_gsmess msg on gskh.gsid=msg.gsid
@@ -546,8 +526,24 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 					declare @m_overcount int --透支次数
 					declare @m_overpoint int --透支分数
 					declare @m_cash int --剩余现金积分
-					declare khCursor cursor local for
-						select kh.khid,kh.wxid,kh.khtype,gskh.subtype,c.leftcash,isnull(ol.overcount,0) overcount,isnull(ol.overpoint,0) overpoint
+
+          declare @i int --iterator
+          declare @iRwCnt int --rowcount
+
+          create table #tmp (
+            id INT IDENTITY (1, 1),
+            khid INT NULL ,
+            wxid VARCHAR(500) NULL ,
+            khtype INT NULL ,
+            subtype INT NULL ,
+            leftcash INT NULL ,
+            overcount INT NULL ,
+            overpoint BIGINT NULL ,
+            cash INT NULL
+          )
+
+          insert into #tmp
+            select kh.khid,kh.wxid,kh.khtype,gskh.subtype,c.leftcash,isnull(ol.overcount,0) overcount,isnull(ol.overpoint,0) overpoint
 						,cc.leftcash cash
 							from kdcc30data..t_cl_gs_kh gskh(nolock)
 							inner join kdcc30data..t_cl_kh kh(nolock) on gskh.khid=kh.khid
@@ -557,20 +553,27 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 							(select khid,count(*) overcount,sum(point) overpoint from kdcc30data..t_cl_over_log olog(nolock)
 							where [status]=1 and gsid=@gsid group by khid) ol on gskh.khid=ol.khid
 								where gskh.gsid=@gsid and kh.wxid!='' and gskh.status=1 and kh.status=0
-					open khCursor
-					fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
-					--判断是否回补积分
-					if @profit<@r_profit*-1
+
+          set @iRwCnt = @@ROWCOUNT --SCOPE_IDENTITY() would also work
+
+          create clustered index idx_tmp on #tmp(id) WITH FILLFACTOR = 100
+          if @profit<@r_profit*-1
 						begin
 							--扣除的积分设为负数
 							set @msgCash=-1*@msgCash
 						end
-					while @@fetch_status=0
-						begin
-							--是否收到消息
-							if not exists(select 1 from kdcc30data..t_cl_wxmess(nolock) where gsmessid=@buyMsgId and khid=@m_khid)
+
+          while @i <= @iRwCnt
+            begin
+              select @m_khid = khid, @m_wxid = wxid,  @m_khtype = khtype, @m_subtype = subtype,
+                @m_leftcash = leftcash, @m_overcount = overcount, @m_overpoint = overpoint, @m_cash = cash
+              from #tmp
+              where id = @i
+
+
+              if not exists(select 1 from kdcc30data..t_cl_wxmess(nolock) where gsmessid=@buyMsgId and khid=@m_khid)
 								begin
-									fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
+									set @i = @i + 1
 									continue
 								end
 							--如果消息需要确认，未确认的消息不发送卖出消息
@@ -578,7 +581,7 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 								begin
 									if not exists (select 1 from kdcc30data..t_cl_wxmess(nolock) where gsmessid=@buyMsgId and khid=@m_khid and isnull(msgconfirm,0)=2)
 										begin
-											fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
+											set @i = @i + 1
 											continue
 										end
 								end
@@ -594,20 +597,20 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 									--判断积分是否足够扣除，如果不够，不推送卖出
 									if @m_leftcash<@__cash
 										begin
-											fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
+											set @i = @i + 1
 											continue
 										end
 								end
 							--如果透支次数超最大透支次数，则不再发送消息
 							if @msgCash>0 and @r_overcount>0 and @m_leftcash<@msgCash and @m_overcount+1>@r_overcount
 								begin
-									fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
+									set @i = @i + 1
 									continue
 								end
 							--如果透支积分大于最大透支分数，则不再发送消息
 							if @msgCash>0 and @r_overpoint>0 and @m_overpoint>@r_overpoint
 								begin
-									fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
+									set @i = @i + 1
 									continue
 								end
 							--最终扣除的赠送积分
@@ -684,12 +687,13 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 								insert into kdcc30data..t_cl_points_balance_detail (itemid,customer,paytype,cash_value,give_value,status,
 	createtime,reference_id) values(8,@m_khid,1,@md_cash,@md_valuecash,1,getdate(),@@identity)
 								end
-							--进入下一个客户判断
-							fetch next from khCursor into @m_khid,@m_wxid,@m_khtype,@m_subtype,@m_leftcash,@m_overcount,@m_overpoint,@m_cash
-						end
+
+
+            set @i = @i + 1
+            end
+            drop table #tmp
+
 					update kdcc30data..t_cl_stock_log set updateid=@p_gybh,updatetime=getdate(),msgendtime=getdate(),msgcount=(select count(*) from kdcc30data..t_cl_wxmess(nolock) where gsmessid=@gsmsgid),step=7 where [sid]=@id
-					close khCursor
-					deallocate khCursor
 					--回补积分的逻辑放到积分对冲的存储过程中
 					--更新回补标识
 					if @profit<@r_profit*-1
