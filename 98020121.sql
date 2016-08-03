@@ -7,197 +7,277 @@
 		  2015-12-28  获取明细从t_cl_kh_intocash更改到t_cl_points_balance_detail
 		  2016-01-20  获取明细添加对非注册用户的支持
 */
-ALTER procedure [dbo].[up_mid_98010121]
-@openid varchar(50)='', --客户微信标识
-@khid int=0, --客户id
-@valuecash int=0, --赠送积分
-@cash int=0, --充值积分
-@cashType int=0, --积分获取类型
-@lsh int=0, --流水号
-@bz varchar(100) --备注
-as
-begin
-	if @valuecash<0
-		set @valuecash=-1*@valuecash
-	declare @intoid int
+ALTER PROCEDURE [dbo].[up_mid_98010121]
+	@openid    VARCHAR(50) = '', --客户微信标识
+	@khid      INT = 0, --客户id
+	@valuecash INT = 0, --赠送积分
+	@cash      INT = 0, --充值积分
+	@cashType  INT = 0, --积分获取类型
+	@lsh       INT = 0, --流水号
+	@bz        VARCHAR(100) --备注
+AS
+BEGIN
+	IF @valuecash < 0
+		SET @valuecash = -1 * @valuecash
+	DECLARE @intoid INT
 	--添加获取明细
-	insert into kdcc30data..t_cl_kh_intocash (khid,cash,cashtype,lsh,bz,dateint,createtime,cashprice)
-				values (@khid,@valuecash+@cash,@cashType,@lsh,@bz,convert(varchar(8),getDate(),112),getDate(),
-				@cash)
+	INSERT INTO kdcc30data..t_cl_kh_intocash (khid, cash, cashtype, lsh, bz, dateint, createtime, cashprice)
+	VALUES (@khid, @valuecash + @cash, @cashType, @lsh, @bz, convert(VARCHAR(8), getDate(), 112), getDate(),
+					@cash)
 	--根据bz查找对应的积分项
-	select @cashType=id from kdcc30data..t_cl_points_balance_item where name=@bz
+	SELECT @cashType = id
+	FROM kdcc30data..t_cl_points_balance_item
+	WHERE name = @bz
 	--获取明细从t_cl_kh_intocash更改到t_cl_points_balance_detail
 	--获取明细有可能是非注册用户，非注册用户插入流水，直接返回 zhangyuchun 2016-01-20
-	insert into kdcc30data..t_cl_points_balance_detail
-		(itemid,customer,paytype,cash_value,give_value,status,createtime,reference_id,remark)
-	values(@cashType,isnull(@khid,0),1,@cash,@valuecash,1,getdate(),@lsh,@openid)
-	select @intoid=@@identity
-	if isnull(@khid,0)=0 and isnull(@openid,'')!=''
-		return
-	--更新账户积分信息
-	update kdcc30data..t_cl_kh_config set totalcash=totalcash+@valuecash+@cash,leftcash=leftcash+@valuecash+@cash,cashprice=isnull(cashprice,0)+@cash where khid=@khid
+	INSERT INTO kdcc30data..t_cl_points_balance_detail
+	(itemid, customer, paytype, cash_value, give_value, status, createtime, reference_id, remark)
+	VALUES (@cashType, isnull(@khid, 0), 1, @cash, @valuecash, 1, getdate(), @lsh, @openid)
+	SELECT @intoid = @@identity
+	IF isnull(@khid, 0) = 0 AND isnull(@openid, '') != ''
+		RETURN
+		--更新账户积分信息
+		update kdcc30data..t_cl_kh_config SET totalcash = totalcash + @valuecash + @cash, leftcash = leftcash + @valuecash +
+																																																 @cash, cashprice =
+isnull(cashprice, 0) + @cash WHERE khid = @khid
 	--如果没有现金积分，建立新的现金积分账户
-	if not exists(select 1 from kdcc30data..t_cl_kh_config_cash where khid=@khid) and @cash>0
-		begin
-			insert into kdcc30data..t_cl_kh_config_cash (khid,leftcash,totalcash,createtime,cashprice,totalpoint)
-							values(@khid,0,0,getdate(),0,0)
-		end
+	IF NOT exists(SELECT 1
+								FROM kdcc30data..t_cl_kh_config_cash
+								WHERE khid = @khid) AND @cash > 0
+		BEGIN
+			INSERT INTO kdcc30data..t_cl_kh_config_cash (khid, leftcash, totalcash, createtime, cashprice, totalpoint)
+			VALUES (@khid, 0, 0, getdate(), 0, 0)
+		END
 	--如果金额大于0，需要更新现金积分表
-	if @cash>0
-		begin
-			update kdcc30data..t_cl_kh_config_cash set totalcash=totalcash+@cash,cashprice=isnull(cashprice,0)+@cash,totalpoint=isnull(totalpoint,0)+@valuecash+@cash
-			where khid=@khid
-		end
+	IF @cash > 0
+		BEGIN
+			UPDATE kdcc30data..t_cl_kh_config_cash
+			SET totalcash = totalcash + @cash, cashprice = isnull(cashprice, 0) + @cash,
+				totalpoint  = isnull(totalpoint, 0) + @valuecash + @cash
+			WHERE khid = @khid
+		END
 	--如果没有透支，直接返回，不需要作任何处理
-	if not exists(select 1 from kdcc30data..t_cl_over_log where khid=@khid and [status]=1)
-		begin
-			update kdcc30data..t_cl_kh_config_cash set leftcash=leftcash+@cash where khid=@khid
-			return
-		end
+	IF NOT exists(SELECT 1
+								FROM kdcc30data..t_cl_over_log
+								WHERE khid = @khid AND [status] = 1)
+		BEGIN
+			UPDATE kdcc30data..t_cl_kh_config_cash
+			SET leftcash = leftcash + @cash
+			WHERE khid = @khid
+			RETURN
+		END
 	--变量定义
-	declare @t_totalpoint int
-	select @t_totalpoint=(sum(point)-isnull(sum(pointed),0)) from (
-select l.id,point,pointed from kdcc30data..t_cl_over_log l
-left join (select oid,sum(valuecash)+sum(cash) pointed from kdcc30data..t_cl_over_detail
-group by oid) d on l.id=d.oid where khid=@khid and [status]=1) t
-	if @t_totalpoint is null or @t_totalpoint=0
-		begin
-			update kdcc30data..t_cl_kh_config_cash set leftcash=leftcash+@cash where khid=@khid
-			return
-		end
+	DECLARE @t_totalpoint INT
+	SELECT @t_totalpoint = (sum(point) - isnull(sum(pointed), 0))
+	FROM (
+				 SELECT
+					 l.id,
+					 point,
+					 pointed
+				 FROM kdcc30data..t_cl_over_log l
+					 LEFT JOIN (SELECT
+												oid,
+												sum(valuecash) + sum(cash) pointed
+											FROM kdcc30data..t_cl_over_detail
+											GROUP BY oid) d ON l.id = d.oid
+				 WHERE khid = @khid AND [status] = 1) t
+	IF @t_totalpoint IS NULL OR @t_totalpoint = 0
+		BEGIN
+			UPDATE kdcc30data..t_cl_kh_config_cash
+			SET leftcash = leftcash + @cash
+			WHERE khid = @khid
+			RETURN
+		END
 	--计算余数
-	declare @y_valuecash int
-	declare @y_cash int
-	select @y_valuecash=@valuecash-isnull(sum(valuecash),0),@y_cash=@cash-isnull(sum(cash),0) from (
-	select convert(int,convert(numeric(19,4),point)/@t_totalpoint*@valuecash) valuecash
-	,convert(int,convert(numeric(19,4),point)/@t_totalpoint*@cash) cash
-	from (
-	select (l.point-isnull(pointed,0)) point from kdcc30data..t_cl_over_log l inner join kdcc30data..t_cl_gs_stock s
-	on l.[sid]=s.id inner join kdcc30data..t_cl_wxmess m on s.gsid=m.gsid and
-	s.stockcode=m.stockcode and s.stockname=m.stockname and s.shuliang=m.stocknumber
-	and s.price=m.stockprice and s.jydatetime=m.tradetime
-	left join (select oid,sum(valuecash)+sum(cash) pointed from kdcc30data..t_cl_over_detail
-	group by oid) d on l.id=d.oid
-	where l.khid=@khid and m.khid=@khid and l.[status]=1)t ) tt
+	DECLARE @y_valuecash INT
+	DECLARE @y_cash INT
+	SELECT
+		@y_valuecash = @valuecash - isnull(sum(valuecash), 0),
+		@y_cash = @cash - isnull(sum(cash), 0)
+	FROM (
+				 SELECT
+					 convert(INT, convert(NUMERIC(19, 4), point) / @t_totalpoint * @valuecash) valuecash,
+					 convert(INT, convert(NUMERIC(19, 4), point) / @t_totalpoint * @cash)      cash
+				 FROM (
+								SELECT (l.point - isnull(pointed, 0)) point
+								FROM kdcc30data..t_cl_over_log l INNER JOIN kdcc30data..t_cl_gs_stock s
+										ON l.[sid] = s.id
+									INNER JOIN kdcc30data..t_cl_wxmess m ON s.gsid = m.gsid AND
+																													s.stockcode = m.stockcode AND s.stockname = m.stockname AND
+																													s.shuliang = m.stocknumber
+																													AND s.price = m.stockprice AND s.jydatetime = m.tradetime
+									LEFT JOIN (SELECT
+															 oid,
+															 sum(valuecash) + sum(cash) pointed
+														 FROM kdcc30data..t_cl_over_detail
+														 GROUP BY oid) d ON l.id = d.oid
+								WHERE l.khid = @khid AND m.khid = @khid AND l.[status] = 1) t) tt
 	--透支明细处理
 	--透支明细变量声明
-	declare @over_id int
-	declare @over_point int
-	declare @over_msgid int
-	declare @over_valuecash int
-	declare @over_cash int
-	declare point_cursor cursor for select l.id overid,(l.point-isnull(pointed,0)) point,m.id msgid,m.valuecash,m.cash from kdcc30data..t_cl_over_log l inner join kdcc30data..t_cl_gs_stock s
-on l.[sid]=s.id inner join kdcc30data..t_cl_wxmess m on s.gsid=m.gsid and
-s.stockcode=m.stockcode and s.stockname=m.stockname and s.shuliang=m.stocknumber
-and s.price=m.stockprice and s.jydatetime=m.tradetime
-left join (select oid,sum(valuecash)+sum(cash) pointed from kdcc30data..t_cl_over_detail
-group by oid) d on l.id=d.oid
-where l.khid=@khid and m.khid=@khid and l.[status]=1 order by l.createtime asc
-	open point_cursor
-	fetch next from point_cursor into @over_id,@over_point,@over_msgid,@over_valuecash,@over_cash
-	--保存一共对冲的积分数
-	declare @ed_valuecash int
-	set @ed_valuecash=0
-	declare @ed_cash int
-	set @ed_cash=0
-	declare @index int
-	set @index=0
-	while @@fetch_status=0
-		begin
-			--按比例计算可以对冲的赠送积分数
-			declare @currValueCash int
+	DECLARE @over_id INT
+	DECLARE @over_point INT
+	DECLARE @over_msgid INT
+	DECLARE @over_valuecash INT
+	DECLARE @over_cash INT
+
+	DECLARE @i INT --iterator
+	DECLARE @iRwCnt INT --rowcount
+
+	CREATE TABLE #tmp_2 (
+		id        INT IDENTITY (1, 1),
+		overid    INT NULL,
+		point     INT NULL,
+		msgid     INT NULL,
+		valuecash INT NULL,
+		cash      INT NULL
+	)
+
+	INSERT INTO #tmp_2
+		SELECT
+			l.id                           overid,
+			(l.point - isnull(pointed, 0)) point,
+			m.id                           msgid,
+			m.valuecash,
+			m.cash
+		FROM kdcc30data..t_cl_over_log l INNER JOIN kdcc30data..t_cl_gs_stock s
+				ON l.[sid] = s.id
+			INNER JOIN kdcc30data..t_cl_wxmess m ON s.gsid = m.gsid AND
+																							s.stockcode = m.stockcode AND s.stockname = m.stockname AND
+																							s.shuliang = m.stocknumber
+																							AND s.price = m.stockprice AND s.jydatetime = m.tradetime
+			LEFT JOIN (SELECT
+									 oid,
+									 sum(valuecash) + sum(cash) pointed
+								 FROM kdcc30data..t_cl_over_detail
+								 GROUP BY oid) d ON l.id = d.oid
+		WHERE l.khid = @khid AND m.khid = @khid AND l.[status] = 1
+		ORDER BY l.createtime ASC
+
+
+	SET @iRwCnt = @@ROWCOUNT --SCOPE_IDENTITY() would also work
+
+  CREATE CLUSTERED INDEX idx_tmp ON #tmp_2(id) WITH FILLFACTOR = 100
+
+	DECLARE @ed_valuecash INT
+	SET @ed_valuecash = 0
+	DECLARE @ed_cash INT
+	SET @ed_cash = 0
+	DECLARE @index INT
+	SET @index = 0
+
+	WHILE @i <= @iRwCnt
+		BEGIN
+
+			SELECT @over_id = overid, @over_point = point, @over_msgid = msgid, @over_cash = cash, @over_valuecash = valuecash
+			FROM #tmp_2
+			WHERE id = @i
+
+			DECLARE @currValueCash INT
 			--按比例计算可以对冲的充值积分数
-			declare @currCash int
-			set @currValueCash=convert(int,convert(numeric(19,4),@over_point)/@t_totalpoint*@valuecash)
-			set @currCash=convert(int,convert(numeric(19,4),@over_point)/@t_totalpoint*@cash)
-			if @index=0
-				begin
-						begin
-							set @currValueCash=@currValueCash+@y_valuecash
-							set @currCash=@currCash+@y_cash
-						end
-				end
-			set @index=@index+1
-			if @currValueCash=0 and @currCash=0
-				begin
-					fetch next from point_cursor into @over_id,@over_point,@over_msgid,@over_valuecash,@over_cash
-					continue
-				end
+			DECLARE @currCash INT
+			SET @currValueCash = convert(INT, convert(NUMERIC(19, 4), @over_point) / @t_totalpoint * @valuecash)
+			SET @currCash = convert(INT, convert(NUMERIC(19, 4), @over_point) / @t_totalpoint * @cash)
+			IF @index = 0
+				BEGIN
+					BEGIN
+						SET @currValueCash = @currValueCash + @y_valuecash
+						SET @currCash = @currCash + @y_cash
+					END
+				END
+			SET @index = @index + 1
+			IF @currValueCash = 0 AND @currCash = 0
+				BEGIN
+					SET @i = @i + 1
+					CONTINUE
+				END
 			--如果完全对冲
-			if (@currValueCash+@currCash)>=@over_point
-					begin
+			IF (@currValueCash + @currCash) >= @over_point
+				BEGIN
 					--清除透支标识
-					update kdcc30data..t_cl_over_log set [status]=0 where id=@over_id
+					UPDATE kdcc30data..t_cl_over_log
+					SET [status] = 0
+					WHERE id = @over_id
 					--如果现金积分足够对冲，先对冲现金积分
-					if @currCash>=@over_point
-						begin
+					IF @currCash >= @over_point
+						BEGIN
 							--消费的现金积分+@over_point
 							--update kdcc30data..t_cl_wxmess set cash=cash+@over_point where id=@over_msgid
 							--添加对冲明细
-							insert into kdcc30data..t_cl_over_detail (oid,iid,valuecash,cash,createtime)
-							values(@over_id,@intoid,0,@over_point,getdate())
+							INSERT INTO kdcc30data..t_cl_over_detail (oid, iid, valuecash, cash, createtime)
+							VALUES (@over_id, @intoid, 0, @over_point, getdate())
 							--更新对冲状态
-							update kdcc30data..t_cl_over_log set [status]=0 where id=@over_id
+							UPDATE kdcc30data..t_cl_over_log
+							SET [status] = 0
+							WHERE id = @over_id
 							--保存已经对冲的现金积分
-							set @ed_cash=@ed_cash+@over_point
-							fetch next from point_cursor into @over_id,@over_point,@over_msgid,@over_valuecash,@over_cash
-							continue
-						end
+							SET @ed_cash = @ed_cash + @over_point
+							SET @i = @i + 1
+							CONTINUE
+						END
 					--如果现金积分为0，赠送积分足够对冲
-					if @currCash=0 and @currValueCash>=@over_point
-						begin
+					IF @currCash = 0 AND @currValueCash >= @over_point
+						BEGIN
 							--消费的现金积分+@over_point
 							--update kdcc30data..t_cl_wxmess set valuecash=valuecash+@over_point where id=@over_msgid
 							--添加对冲明细
-							insert into kdcc30data..t_cl_over_detail (oid,iid,valuecash,cash,createtime)
-							values(@over_id,@intoid,@over_point,0,getdate())
+							INSERT INTO kdcc30data..t_cl_over_detail (oid, iid, valuecash, cash, createtime)
+							VALUES (@over_id, @intoid, @over_point, 0, getdate())
 							--更新对冲状态
-							update kdcc30data..t_cl_over_log set [status]=0 where id=@over_id
+							UPDATE kdcc30data..t_cl_over_log
+							SET [status] = 0
+							WHERE id = @over_id
 							--保存已经对冲的现金积分
-							set @ed_valuecash=@ed_valuecash+@over_point
-							fetch next from point_cursor into @over_id,@over_point,@over_msgid,@over_valuecash,@over_cash
-							continue
-						end
+							SET @ed_valuecash = @ed_valuecash + @over_point
+							SET @i = @i + 1
+							CONTINUE
+						END
 					--如果需要分别对冲
-					if @currCash<@over_point and @currValueCash<@over_point
-						begin
+					IF @currCash < @over_point AND @currValueCash < @over_point
+						BEGIN
 							--分别对冲
-							declare @_cash int
-							declare @_valuecash int
-							set @_cash=@currCash
-							set @_valuecash=@over_point-@_cash
+							DECLARE @_cash INT
+							DECLARE @_valuecash INT
+							SET @_cash = @currCash
+							SET @_valuecash = @over_point - @_cash
 							--添加对冲明细
-							insert into kdcc30data..t_cl_over_detail (oid,iid,valuecash,cash,createtime)
-							values(@over_id,@intoid,@_valuecash,@_cash,getdate())
+							INSERT INTO kdcc30data..t_cl_over_detail (oid, iid, valuecash, cash, createtime)
+							VALUES (@over_id, @intoid, @_valuecash, @_cash, getdate())
 							--更新对冲状态
-							update kdcc30data..t_cl_over_log set [status]=0 where id=@over_id
+							UPDATE kdcc30data..t_cl_over_log
+							SET [status] = 0
+							WHERE id = @over_id
 							--update kdcc30data..t_cl_wxmess set valuecash=valuecash+@_valuecash,cash=cash+@cash where id=@over_msgid
-							set @ed_valuecash=@ed_valuecash+@_valuecash
-							set @ed_cash=@ed_cash+@_cash
-						end
-				end
+							SET @ed_valuecash = @ed_valuecash + @_valuecash
+							SET @ed_cash = @ed_cash + @_cash
+						END
+				END
 			--如果不能全部对冲
-			else
-				begin
+			ELSE
+				BEGIN
 					--update kdcc30data..t_cl_wxmess set valuecash=valuecash+@currValueCash,cash=cash+@currCash where id=@over_msgid
 					--添加对冲明细
-					insert into kdcc30data..t_cl_over_detail (oid,iid,valuecash,cash,createtime) values(@over_id,@intoid,@currValueCash,@currCash,getdate())
-					set @ed_valuecash=@ed_valuecash+@currValueCash
-					set @ed_cash=@ed_cash+@currCash
-				end
-			--下一次循环
-			fetch next from point_cursor into @over_id,@over_point,@over_msgid,@over_valuecash,@over_cash
-		end
-		close point_cursor
-		deallocate point_cursor
-		--剩余的赠送积分和剩余的现金积分
-		--剩余的赠送积分=@valuecash-@ed_valuecash
-		--剩余的现金积分=@cash-@ed_cash
-		--更新客户积分账户
-		--更新客户现金积分账户
-		if @cash-@ed_cash>0
-			begin
-				update kdcc30data..t_cl_kh_config_cash set leftcash=leftcash+(@cash-@ed_cash) where khid=@khid
-			end
-end
+					INSERT INTO kdcc30data..t_cl_over_detail (oid, iid, valuecash, cash, createtime)
+					VALUES (@over_id, @intoid, @currValueCash, @currCash, getdate())
+					SET @ed_valuecash = @ed_valuecash + @currValueCash
+					SET @ed_cash = @ed_cash + @currCash
+				END
+
+
+
+		SET @i = @i + 1
+    END
+  DROP TABLE #tmp_2
+  
+	--剩余的赠送积分和剩余的现金积分
+	--剩余的赠送积分=@valuecash-@ed_valuecash
+	--剩余的现金积分=@cash-@ed_cash
+	--更新客户积分账户
+	--更新客户现金积分账户
+	IF @cash - @ed_cash > 0
+		BEGIN
+			UPDATE kdcc30data..t_cl_kh_config_cash
+			SET leftcash = leftcash + (@cash - @ed_cash)
+			WHERE khid = @khid
+		END
+END
 GO
