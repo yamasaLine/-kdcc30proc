@@ -529,6 +529,8 @@ a inner join kdcc30data..t_cl_gsmess b(nolock) on a.gsid=b.gsid and a.stockcode=
 
           declare @i int --iterator
           declare @iRwCnt int --rowcount
+          
+          set @i = 1
 
           create table #tmp (
             id INT IDENTITY (1, 1),
