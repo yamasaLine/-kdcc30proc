@@ -1,12 +1,3 @@
-/*
-*author:zhangyuchun
-*description:积分对冲
-*adddate:2015-07-07
-*editdate:2015-07-13  添加积分获取明细日志记录
-		  2015-10-14  修改更新现金积分表的条件
-		  2015-12-28  获取明细从t_cl_kh_intocash更改到t_cl_points_balance_detail
-		  2016-01-20  获取明细添加对非注册用户的支持
-*/
 ALTER PROCEDURE [dbo].[up_mid_98010121]
 	@openid    VARCHAR(50) = '', --客户微信标识
 	@khid      INT = 0, --客户id
@@ -122,6 +113,8 @@ isnull(cashprice, 0) + @cash WHERE khid = @khid
 
 	DECLARE @i INT --iterator
 	DECLARE @iRwCnt INT --rowcount
+
+  set @i = 1
 
 	CREATE TABLE #tmp_2 (
 		id        INT IDENTITY (1, 1),
@@ -267,7 +260,7 @@ isnull(cashprice, 0) + @cash WHERE khid = @khid
 		SET @i = @i + 1
     END
   DROP TABLE #tmp_2
-  
+
 	--剩余的赠送积分和剩余的现金积分
 	--剩余的赠送积分=@valuecash-@ed_valuecash
 	--剩余的现金积分=@cash-@ed_cash
